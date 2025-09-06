@@ -34,6 +34,8 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+from telegram.error import TelegramError
+import logging
 
 # --- DB (PostgreSQL) optional layer ---
 try:
@@ -789,6 +791,25 @@ async def admin_db_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rows.append([InlineKeyboardButton("↩️ В меню", callback_data="back_menu")])
     await q.edit_message_text("адм: Выбери таблицу:", reply_markup=InlineKeyboardMarkup(rows))
 
+async def webhook_watchdog(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        public_url = os.environ.get("PUBLIC_URL")
+        desired = public_url.rstrip("/") + "/webhook" if public_url else None
+        info = await context.bot.get_webhook_info()
+        mismatch = desired and info.url != desired
+        has_error = bool(getattr(info, "last_error_message", None))
+        if mismatch or has_error:
+            logging.warning("Webhook check: mismatch=%s error=%s; re-setting…",
+                            mismatch, getattr(info, "last_error_message", ""))
+            await context.bot.set_webhook(
+                url=desired or info.url,
+                allowed_updates=[],
+                drop_pending_updates=False,
+                secret_token=os.environ.get("WEBHOOK_SECRET") or None
+            )
+    except TelegramError as e:
+        logging.exception("Webhook watchdog error: %s", e)
+
 
 async def admin_db_show_table(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -828,6 +849,19 @@ async def admin_db_show_table(update: Update, context: ContextTypes.DEFAULT_TYPE
     ])
     await q.message.reply_text("Готово.", reply_markup=kb)
 
+async def _ensure_webhook_current():
+    public_url = os.environ.get("PUBLIC_URL")
+    if not public_url:
+        return
+    desired = public_url.rstrip("/") + "/webhook"
+    info = await ptb_app.bot.get_webhook_info()
+    if info.url != desired:
+        await ptb_app.bot.set_webhook(
+            url=desired,
+            allowed_updates=[],
+            drop_pending_updates=False,
+            secret_token=os.environ.get("WEBHOOK_SECRET") or None
+        )
 
 # === Ввод показаний и прочие сценарии ===
 async def choose_floor(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1466,6 +1500,9 @@ def build_ptb_app() -> Application:
     # Команды
     app.add_handler(CommandHandler("start", start))
 
+    # Планируем проверку раз в 15 минут (первый запуск через 30 сек)
+    app.job_queue.run_repeating(webhook_watchdog, interval=900, first=30)
+
     # Админ-кнопки (вне ConversationHandler'ов)
     app.add_handler(CallbackQueryHandler(admin_db_start, pattern=r"^admin_show_tables$"))
     app.add_handler(CallbackQueryHandler(admin_db_show_table, pattern=r"^dbtbl_[A-Za-z0-9_]+$"))
@@ -1601,6 +1638,7 @@ ptb_app = build_ptb_app()
 async def lifespan(_: FastAPI):
     async with ptb_app:
         await ptb_app.start()
+        await _ensure_webhook_current()   # ← проверка на старте
         yield
         await ptb_app.stop()
 
@@ -1646,5 +1684,17 @@ async def set_webhook():
     if not public_url:
         return {"ok": False, "error": "PUBLIC_URL не задан в окружении"}
     url = public_url.rstrip("/") + "/webhook"
-    ok = await ptb_app.bot.set_webhook(url)
+    secret = os.environ.get("WEBHOOK_SECRET") or None  # опционально
+    ok = await ptb_app.bot.set_webhook(
+        url=url,
+        allowed_updates=[],              # важно: явно сбрасываем список
+        drop_pending_updates=False,
+        secret_token=secret
+    )
     return {"ok": ok, "url": url}
+
+@app.get("/reset_webhook")
+async def reset_webhook():
+    # Полный сброс вебхука на стороне Telegram
+    ok = await ptb_app.bot.delete_webhook(drop_pending_updates=True)
+    return {"ok": ok}
