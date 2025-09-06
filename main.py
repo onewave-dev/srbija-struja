@@ -549,6 +549,28 @@ def build_stats_last12_table_for_floor(readings: dict, floor: str) -> str:
     return "\n".join(lines)
 
 
+def build_readings_table_for_floor(readings: dict, floor: str) -> str:
+    months = sorted([k for k in readings.keys() if k != "_meta"], reverse=True)
+    header = ["Мес", "ВТ", "НТ"]
+    widths = [5, 7, 7]
+    head = " ".join(h.ljust(w) for h, w in zip(header, widths))
+    lines = [head, "-" * len(head)]
+    for ym in months:
+        y, m = int(ym[:4]), int(ym[5:])
+        vals = readings.get(ym, {}).get(floor, {})
+        d_day = vals.get("day") if vals else None
+        d_nt = vals.get("night") if vals else None
+        row = [
+            month_label_mm_yy(y, m).ljust(widths[0]),
+            ("—" if d_day is None else str(d_day)).rjust(widths[1]),
+            ("—" if d_nt is None else str(d_nt)).rjust(widths[2]),
+        ]
+        lines.append(" ".join(row))
+    if len(lines) == 2:
+        return "Нет достаточных данных для построения таблицы."
+    return "\n".join(lines)
+
+
 # === 6) Поиск последнего полного месяца ===
 def latest_complete_month(readings: dict) -> Optional[str]:
     months = sorted([k for k in readings.keys() if k != "_meta"])
@@ -586,7 +608,7 @@ def tariff_exists_for_month(ym: str) -> bool:
 (UNDO_CHOOSE_FLOOR, UNDO_CONFIRM) = range(300, 302)
 
 AFTER_SAVE_PROMPT = 400
-(STATS_CHOOSE_FLOOR,) = range(500, 501)
+(STATS_CHOOSE_TYPE, STATS_CONS_CHOOSE_FLOOR, STATS_READ_CHOOSE_FLOOR) = range(500, 503)
 
 
 # === 8) Меню (c админ-кнопкой) ===
@@ -601,7 +623,7 @@ def get_main_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("📅 Показать предыдущий месяц", callback_data="show_prev")],
         [InlineKeyboardButton("💰 Изменить тарифы", callback_data="set_tariffs")],
         [InlineKeyboardButton("↩️ Откат последних показаний", callback_data="undo_last")],
-        [InlineKeyboardButton("📈 Статистика (последние 12)", callback_data="stats_range")],
+        [InlineKeyboardButton("📈 Статистика", callback_data="stats_menu")],
     ]
     if USE_DB and is_admin:
         keyboard.append([InlineKeyboardButton("адм: Просмотр таблиц", callback_data="admin_show_tables")])
@@ -706,10 +728,18 @@ def undo_confirm_kb(latest_ym: str, vals: dict, floor: str) -> InlineKeyboardMar
                                   InlineKeyboardButton("❌ Отмена", callback_data="undo_no")]])
 
 
-def stats_floors_kb() -> InlineKeyboardMarkup:
+def stats_main_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Этаж 1", callback_data="stats_floor_1"),
-         InlineKeyboardButton("Этаж 2", callback_data="stats_floor_2")],
+        [InlineKeyboardButton("Потребление по месяцам", callback_data="stats_cons")],
+        [InlineKeyboardButton("Показания по месяцам", callback_data="stats_read")],
+        [InlineKeyboardButton("↩️ В меню", callback_data="back_menu")],
+    ])
+
+
+def stats_floors_kb(prefix: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Этаж 1", callback_data=f"{prefix}_floor_1"),
+         InlineKeyboardButton("Этаж 2", callback_data=f"{prefix}_floor_2")],
         [InlineKeyboardButton("↩️ В меню", callback_data="back_menu")],
     ])
 
@@ -1440,27 +1470,66 @@ async def stats_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ALLOWED_USERS:
         await q.edit_message_text("⛔ У вас нет доступа к этому боту.", reply_markup=main_menu_markup_for(update))
         return ConversationHandler.END
-    await q.edit_message_text("Выберите этаж для статистики (последние 12 месяцев):",
-                              reply_markup=stats_floors_kb())
-    return STATS_CHOOSE_FLOOR
+    await q.edit_message_text("Выберите раздел статистики:", reply_markup=stats_main_kb())
+    return STATS_CHOOSE_TYPE
 
 
-async def stats_choose_floor(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def stats_choose_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     data = q.data
     if data == "back_menu":
         await q.edit_message_text("Главное меню:", reply_markup=main_menu_markup_for(update))
         return ConversationHandler.END
-    if data not in {"stats_floor_1", "stats_floor_2"}:
-        await q.edit_message_text("Пожалуйста, выберите этаж:", reply_markup=stats_floors_kb())
-        return STATS_CHOOSE_FLOOR
+    if data == "stats_cons":
+        await q.edit_message_text("Выберите этаж:", reply_markup=stats_floors_kb("stats_cons"))
+        return STATS_CONS_CHOOSE_FLOOR
+    if data == "stats_read":
+        await q.edit_message_text("Выберите этаж:", reply_markup=stats_floors_kb("stats_read"))
+        return STATS_READ_CHOOSE_FLOOR
+    await q.edit_message_text("Выберите раздел статистики:", reply_markup=stats_main_kb())
+    return STATS_CHOOSE_TYPE
+
+
+async def stats_cons_choose_floor(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    data = q.data
+    if data == "back_menu":
+        await q.edit_message_text("Главное меню:", reply_markup=main_menu_markup_for(update))
+        return ConversationHandler.END
+    if data not in {"stats_cons_floor_1", "stats_cons_floor_2"}:
+        await q.edit_message_text("Пожалуйста, выберите этаж:", reply_markup=stats_floors_kb("stats_cons"))
+        return STATS_CONS_CHOOSE_FLOOR
     floor = "1" if data.endswith("_1") else "2"
     if update.effective_user.id not in ALLOWED_USERS:
         await q.edit_message_text("⛔ У вас нет доступа к этому боту.", reply_markup=main_menu_markup_for(update))
         return ConversationHandler.END
     readings = load_json(READINGS_FP)
     table_text = build_stats_last12_table_for_floor(readings, floor)
+    html = f"<pre>{table_text}</pre>"
+    await q.edit_message_text(
+        html, reply_markup=main_menu_markup_for(update), parse_mode="HTML", disable_web_page_preview=True
+    )
+    return ConversationHandler.END
+
+
+async def stats_read_choose_floor(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    data = q.data
+    if data == "back_menu":
+        await q.edit_message_text("Главное меню:", reply_markup=main_menu_markup_for(update))
+        return ConversationHandler.END
+    if data not in {"stats_read_floor_1", "stats_read_floor_2"}:
+        await q.edit_message_text("Пожалуйста, выберите этаж:", reply_markup=stats_floors_kb("stats_read"))
+        return STATS_READ_CHOOSE_FLOOR
+    floor = "1" if data.endswith("_1") else "2"
+    if update.effective_user.id not in ALLOWED_USERS:
+        await q.edit_message_text("⛔ У вас нет доступа к этому боту.", reply_markup=main_menu_markup_for(update))
+        return ConversationHandler.END
+    readings = load_json(READINGS_FP)
+    table_text = build_readings_table_for_floor(readings, floor)
     html = f"<pre>{table_text}</pre>"
     await q.edit_message_text(
         html, reply_markup=main_menu_markup_for(update), parse_mode="HTML", disable_web_page_preview=True
@@ -1587,9 +1656,23 @@ def build_ptb_app() -> Application:
 
     # Статистика
     conv_stats = ConversationHandler(
-        entry_points=[CallbackQueryHandler(stats_start, pattern="^stats_range$")],
+        entry_points=[CallbackQueryHandler(stats_start, pattern="^stats_menu$")],
         states={
-            STATS_CHOOSE_FLOOR: [CallbackQueryHandler(stats_choose_floor, pattern="^(stats_floor_1|stats_floor_2|back_menu)$")],
+            STATS_CHOOSE_TYPE: [
+                CallbackQueryHandler(stats_choose_type, pattern="^(stats_cons|stats_read|back_menu)$"),
+            ],
+            STATS_CONS_CHOOSE_FLOOR: [
+                CallbackQueryHandler(
+                    stats_cons_choose_floor,
+                    pattern="^(stats_cons_floor_1|stats_cons_floor_2|back_menu)$",
+                )
+            ],
+            STATS_READ_CHOOSE_FLOOR: [
+                CallbackQueryHandler(
+                    stats_read_choose_floor,
+                    pattern="^(stats_read_floor_1|stats_read_floor_2|back_menu)$",
+                )
+            ],
         },
         fallbacks=[CommandHandler("start", start)],
         allow_reentry=True,
