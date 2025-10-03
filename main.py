@@ -704,7 +704,7 @@ def card_submission_kb() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(
                 "Позвонить 0800 360 300 (ЕДС)",
-                callback_data="call_eds",
+                url="tel:+381800360300",
             )
         ],
         [InlineKeyboardButton("↩️ В меню", callback_data="back_menu")],
@@ -892,36 +892,6 @@ async def card_submission_show(update: Update, context: ContextTypes.DEFAULT_TYP
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
-
-
-async def card_submission_call(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    if update.effective_user.id not in ALLOWED_USERS:
-        await q.edit_message_text(
-            "⛔ У вас нет доступа к этому боту.",
-            reply_markup=main_menu_markup_for(update),
-        )
-        return
-
-    phone_number = "+381800360300"
-    if q.message:
-        with suppress(TelegramError):
-            await q.message.reply_contact(
-                phone_number=phone_number,
-                first_name="ЕДС",
-                last_name="Контакт-центр 0800 360 300",
-            )
-        with suppress(TelegramError):
-            await q.message.edit_reply_markup(reply_markup=card_submission_kb())
-    else:
-        with suppress(TelegramError):
-            await context.bot.send_contact(
-                chat_id=update.effective_chat.id,
-                phone_number=phone_number,
-                first_name="ЕДС",
-                last_name="Контакт-центр 0800 360 300",
-            )
 
 
 # --- Админ: Просмотр БД ---
@@ -1688,7 +1658,6 @@ def build_ptb_app() -> Application:
     app.add_handler(CallbackQueryHandler(admin_db_start, pattern=r"^admin_show_tables$"))
     app.add_handler(CallbackQueryHandler(admin_db_show_table, pattern=r"^dbtbl_[A-Za-z0-9_]+$"))
     app.add_handler(CallbackQueryHandler(card_submission_show, pattern=r"^card_submission$"))
-    app.add_handler(CallbackQueryHandler(card_submission_call, pattern=r"^call_eds$"))
 
     # Ввод показаний
     conv_readings = ConversationHandler(
