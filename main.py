@@ -1641,7 +1641,15 @@ async def stats_read_choose_floor(update: Update, context: ContextTypes.DEFAULT_
 def build_ptb_app() -> Application:
     if not TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN не задан в окружении")
-    app = Application.builder().token(TOKEN).updater(None).build()
+    app = (
+        Application.builder()
+        .token(TOKEN)
+        .job_queue(None)
+        .updater(None)
+        .build()
+    )
+
+    assert app.job_queue is None, "PTB Application must not create JobQueue in webhook mode"
 
     # Команды
     app.add_handler(CommandHandler("start", start))
