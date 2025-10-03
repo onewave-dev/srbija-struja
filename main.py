@@ -611,32 +611,32 @@ def build_submission_card_html(raw_readings: dict) -> str:
             return "—"
         return escape(str(val))
 
-    rows = [
-        "<tr><th>Шифра мерног места</th><th>ВТ</th><th>НТ</th></tr>",
+    header = "Шифра мерног места"
+    table_lines = [
+        f"{header:<20} {'ВТ':>8} {'НТ':>8}",
     ]
     for floor in ("1", "2"):
         vals = month_data.get(floor, {}) if isinstance(month_data, dict) else {}
         day_val = vals.get("day") if isinstance(vals, dict) else None
         night_val = vals.get("night") if isinstance(vals, dict) else None
-        rows.append(
-            "<tr>"
-            f"<td>{escape(meters.get(floor, floor))}</td>"
-            f"<td>{fmt_val(day_val)}</td>"
-            f"<td>{fmt_val(night_val)}</td>"
-            "</tr>"
+        meter = meters.get(floor, floor)
+        table_lines.append(
+            f"{meter:<20} {fmt_val(day_val):>8} {fmt_val(night_val):>8}"
         )
 
-    table_html = "<table>" + "".join(rows) + "</table>"
+    table_text = "\n".join(table_lines)
 
     parts = [
         "<b>Аранджеловац</b>",
         f"Мес.: {escape(month_label)}",
-        table_html,
         "",
-        "<b>Ябланичка</b>:",
-        "ЕД Броj:&nbsp;&nbsp;278067621",
+        "<b>Показания</b>",
+        f"<pre>{escape(table_text)}</pre>",
+        "",
+        "<b>Ябланичка</b>",
+        "ЕД Број: 278067621",
     ]
-    return "<br>".join(parts)
+    return "\n".join(parts)
 
 
 # === 6) Поиск последнего полного месяца ===
