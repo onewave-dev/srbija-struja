@@ -611,7 +611,7 @@ def build_submission_card_html(raw_readings: dict) -> str:
             return "—"
         return escape(str(val))
 
-    header = "Шифра мерног места"
+    header = "Шифра м. м."
     table_lines = [
         f"{header:<20} {'ВТ':>8} {'НТ':>8}",
     ]
