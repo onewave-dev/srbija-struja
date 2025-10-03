@@ -1,5 +1,5 @@
 fastapi>=0.109
 uvicorn[standard]>=0.23
-python-telegram-bot>=20.0,<21
+python-telegram-bot[job-queue]>=20.0,<21
 psycopg[binary]>=3.1 # можно исключить, если не будешь подключать PostgreSQL
 httpx>=0.24 # PTB использует httpx; пин — на всякий случай
