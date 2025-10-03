@@ -630,11 +630,11 @@ def build_submission_card_html(raw_readings: dict) -> str:
         "<b>Аранджеловац</b>",
         f"Мес.: {escape(month_label)}",
         "",
-        "<b>Показания</b>",
+        "Показания",
         f"<pre>{escape(table_text)}</pre>",
         "",
         "<b>Ябланичка</b>",
-        "ЕД Број: 278067621",
+        "ЕД Број: 278&#8203;067&#8203;621",
     ]
     return "\n".join(parts)
 
