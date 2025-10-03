@@ -13,13 +13,14 @@
 # (опц.) DATABASE_URL= postgresql://user:pass@host:port/db
 # =============================================================================
 
+import asyncio
 import os
 import json
 import hmac
 import logging
 import calendar
 from datetime import datetime
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from http import HTTPStatus
 from typing import Optional, Tuple, List
 from decimal import Decimal
@@ -27,7 +28,7 @@ import uuid
 from html import escape
 
 from fastapi import FastAPI, Request, Response
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError
 from telegram.ext import (
     Application,
@@ -1635,9 +1636,6 @@ def build_ptb_app() -> Application:
     # Команды
     app.add_handler(CommandHandler("start", start))
 
-    # Плановый health-check вебхука раз в 15 минут
-    app.job_queue.run_repeating(webhook_watchdog, interval=900, first=30)
-
     # Админ-кнопки (вне ConversationHandler'ов)
     app.add_handler(CallbackQueryHandler(admin_db_start, pattern=r"^admin_show_tables$"))
     app.add_handler(CallbackQueryHandler(admin_db_show_table, pattern=r"^dbtbl_[A-Za-z0-9_]+$"))
@@ -1796,16 +1794,16 @@ async def _ensure_webhook_current():
             secret_token=os.environ.get("WEBHOOK_SECRET") or None,
         )
 
-async def webhook_watchdog(context: ContextTypes.DEFAULT_TYPE):
+async def webhook_watchdog(bot: Bot):
     try:
         desired = _desired_webhook_url()
-        info = await context.bot.get_webhook_info()
+        info = await bot.get_webhook_info()
         mismatch = bool(desired) and (info.url != desired)
         has_error = bool(getattr(info, "last_error_message", None))
         if mismatch or has_error:
             logging.warning("Webhook watchdog: mismatch=%s error=%s",
                             mismatch, getattr(info, "last_error_message", ""))
-            await context.bot.set_webhook(
+            await bot.set_webhook(
                 url=desired or info.url,
                 allowed_updates=[],
                 drop_pending_updates=False,
@@ -1814,12 +1812,25 @@ async def webhook_watchdog(context: ContextTypes.DEFAULT_TYPE):
     except TelegramError:
         logging.exception("Webhook watchdog failed")
 
+
+async def _webhook_watchdog_loop(bot: Bot, interval_sec: int) -> None:
+    while True:
+        await webhook_watchdog(bot)
+        await asyncio.sleep(interval_sec)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     async with ptb_app:
         await ptb_app.start()
-        await _ensure_webhook_current()   # проверяем и чиним вебхук на старте
-        yield
+        watchdog_task = asyncio.create_task(_webhook_watchdog_loop(ptb_app.bot, 900))
+        try:
+            await _ensure_webhook_current()   # проверяем и чиним вебхук на старте
+            yield
+        finally:
+            watchdog_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await watchdog_task
         await ptb_app.stop()
 
 
