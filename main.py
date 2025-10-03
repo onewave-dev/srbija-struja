@@ -24,6 +24,7 @@ from http import HTTPStatus
 from typing import Optional, Tuple, List
 from decimal import Decimal
 import uuid
+from html import escape
 
 from fastapi import FastAPI, Request, Response
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -571,6 +572,74 @@ def build_readings_table_for_floor(readings: dict, floor: str) -> str:
     return "\n".join(lines)
 
 
+def _readings_payload(raw: dict) -> dict:
+    if isinstance(raw, dict) and isinstance(raw.get("readings"), dict):
+        return raw["readings"]
+    return raw
+
+
+def _latest_month(readings: dict) -> Optional[str]:
+    months = [k for k in readings.keys() if k != "_meta" and isinstance(readings.get(k), dict)]
+    if not months:
+        return None
+    return sorted(months)[-1]
+
+
+def _format_month_human(ym: str) -> str:
+    try:
+        year = int(ym[:4])
+        month = int(ym[5:7])
+    except (ValueError, TypeError):
+        return ym
+    return f"{month_name_ru(month)} {year}"
+
+
+def build_submission_card_html(raw_readings: dict) -> str:
+    readings = _readings_payload(raw_readings)
+    latest = _latest_month(readings)
+    month_label = _format_month_human(latest) if latest else "—"
+    month_data = readings.get(latest, {}) if latest else {}
+
+    meters = {
+        "1": "501000021651",
+        "2": "501000021652",
+    }
+
+    def fmt_val(val: Optional[int]) -> str:
+        if val is None:
+            return "—"
+        return escape(str(val))
+
+    rows = [
+        "<tr><th>Шифра мерног места</th><th>ВТ</th><th>НТ</th></tr>",
+    ]
+    for floor in ("1", "2"):
+        vals = month_data.get(floor, {}) if isinstance(month_data, dict) else {}
+        day_val = vals.get("day") if isinstance(vals, dict) else None
+        night_val = vals.get("night") if isinstance(vals, dict) else None
+        rows.append(
+            "<tr>"
+            f"<td>{escape(meters.get(floor, floor))}</td>"
+            f"<td>{fmt_val(day_val)}</td>"
+            f"<td>{fmt_val(night_val)}</td>"
+            "</tr>"
+        )
+
+    table_html = "<table>" + "".join(rows) + "</table>"
+
+    parts = [
+        "тел.: 0800 360 300",
+        "",
+        "<b>Аранджеловац</b>",
+        f"Мес.: {escape(month_label)}",
+        table_html,
+        "",
+        "<b>Ябланичка</b>:",
+        "ЕД Броj:&nbsp;&nbsp;278067621",
+    ]
+    return "<br>".join(parts)
+
+
 # === 6) Поиск последнего полного месяца ===
 def latest_complete_month(readings: dict) -> Optional[str]:
     months = sorted([k for k in readings.keys() if k != "_meta"])
@@ -621,6 +690,7 @@ def get_main_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("📥 Ввести показания", callback_data="input_readings")],
         [InlineKeyboardButton("📊 Новый расчёт за месяц", callback_data="calc_current")],
         [InlineKeyboardButton("📅 Показать прежние расчеты", callback_data="show_prev")],
+        [InlineKeyboardButton("🪪 Карточка подачи показаний", callback_data="card_submission")],
         [InlineKeyboardButton("💰 Изменить тарифы", callback_data="set_tariffs")],
         [InlineKeyboardButton("↩️ Откат последних показаний", callback_data="undo_last")],
         [InlineKeyboardButton("📈 Статистика", callback_data="stats_menu")],
@@ -792,6 +862,25 @@ async def open_menu_from_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("Выберите этаж:", reply_markup=floors_kb())
         return CHOOSE_FLOOR
     await q.edit_message_text("Главное меню:", reply_markup=main_menu_markup_for(update))
+
+
+async def card_submission_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if update.effective_user.id not in ALLOWED_USERS:
+        await q.edit_message_text(
+            "⛔ У вас нет доступа к этому боту.",
+            reply_markup=main_menu_markup_for(update),
+        )
+        return
+    readings = load_json(READINGS_FP)
+    html = build_submission_card_html(readings)
+    await q.edit_message_text(
+        html,
+        reply_markup=main_menu_markup_for(update),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
 
 
 # --- Админ: Просмотр БД ---
@@ -1552,6 +1641,7 @@ def build_ptb_app() -> Application:
     # Админ-кнопки (вне ConversationHandler'ов)
     app.add_handler(CallbackQueryHandler(admin_db_start, pattern=r"^admin_show_tables$"))
     app.add_handler(CallbackQueryHandler(admin_db_show_table, pattern=r"^dbtbl_[A-Za-z0-9_]+$"))
+    app.add_handler(CallbackQueryHandler(card_submission_show, pattern=r"^card_submission$"))
 
     # Ввод показаний
     conv_readings = ConversationHandler(
