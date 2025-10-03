@@ -609,29 +609,27 @@ def build_submission_card_html(raw_readings: dict) -> str:
     def fmt_val(val: Optional[int]) -> str:
         if val is None:
             return "—"
-        return escape(str(val))
+        return str(val)
 
-    header = "Шифра мерног места"
-    table_lines = [
-        f"{header:<20} {'ВТ':>8} {'НТ':>8}",
-    ]
+    lines = []
     for floor in ("1", "2"):
         vals = month_data.get(floor, {}) if isinstance(month_data, dict) else {}
         day_val = vals.get("day") if isinstance(vals, dict) else None
         night_val = vals.get("night") if isinstance(vals, dict) else None
         meter = meters.get(floor, floor)
-        table_lines.append(
-            f"{meter:<20} {fmt_val(day_val):>8} {fmt_val(night_val):>8}"
+        lines.append(f"Шифра м. м. - {meter}")
+        lines.append(
+            f"ВТ {fmt_val(day_val)}    НТ {fmt_val(night_val)}"
         )
 
-    table_text = "\n".join(table_lines)
+    text_block = "\n".join(lines)
 
     parts = [
         "<b>Аранджеловац</b>",
         f"Мес.: {escape(month_label)}",
         "",
         "Показания",
-        f"<pre>{escape(table_text)}</pre>",
+        f"<pre>{escape(text_block)}</pre>",
         "",
         "<b>Ябланичка</b>",
         "ЕД Број: 278&#8203;067&#8203;621",
