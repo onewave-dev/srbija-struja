@@ -619,8 +619,8 @@ def is_admin_id(user_id: Optional[int]) -> bool:
 def get_main_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton("📥 Ввести показания", callback_data="input_readings")],
-        [InlineKeyboardButton("📊 Расчёт за текущий месяц", callback_data="calc_current")],
-        [InlineKeyboardButton("📅 Показать предыдущий месяц", callback_data="show_prev")],
+        [InlineKeyboardButton("📊 Новый расчёт за месяц", callback_data="calc_current")],
+        [InlineKeyboardButton("📅 Показать прежние расчеты", callback_data="show_prev")],
         [InlineKeyboardButton("💰 Изменить тарифы", callback_data="set_tariffs")],
         [InlineKeyboardButton("↩️ Откат последних показаний", callback_data="undo_last")],
         [InlineKeyboardButton("📈 Статистика", callback_data="stats_menu")],
