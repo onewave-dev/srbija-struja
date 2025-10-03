@@ -628,8 +628,6 @@ def build_submission_card_html(raw_readings: dict) -> str:
     table_html = "<table>" + "".join(rows) + "</table>"
 
     parts = [
-        "тел.: 0800 360 300",
-        "",
         "<b>Аранджеловац</b>",
         f"Мес.: {escape(month_label)}",
         table_html,
@@ -698,6 +696,18 @@ def get_main_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
     if USE_DB and is_admin:
         keyboard.append([InlineKeyboardButton("адм: Просмотр таблиц", callback_data="admin_show_tables")])
     return InlineKeyboardMarkup(keyboard)
+
+
+def card_submission_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "Позвонить 0800 360 300 (ЕДС)",
+                url="tel:+381800360300",
+            )
+        ],
+        [InlineKeyboardButton("↩️ В меню", callback_data="back_menu")],
+    ])
 
 
 def main_menu_markup_for(update: Update) -> InlineKeyboardMarkup:
@@ -877,7 +887,7 @@ async def card_submission_show(update: Update, context: ContextTypes.DEFAULT_TYP
     html = build_submission_card_html(readings)
     await q.edit_message_text(
         html,
-        reply_markup=main_menu_markup_for(update),
+        reply_markup=card_submission_kb(),
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
