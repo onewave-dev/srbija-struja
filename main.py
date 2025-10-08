@@ -26,6 +26,7 @@ from typing import Optional, Tuple, List
 from decimal import Decimal
 import uuid
 from html import escape
+import base64
 
 from fastapi import FastAPI, Request, Response
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -40,22 +41,7 @@ from telegram.ext import (
     filters,
 )
 
-# временно - эндпойнт для резервного скачивания данных
 
-@app.get("/admin/export_json")
-async def export_json():
-    import base64
-    def _read(fp):
-        try:
-            with open(fp, "rb") as f: 
-                return base64.b64encode(f.read()).decode("ascii")
-        except Exception:
-            return None
-    return {
-        "readings_b64": _read(READINGS_FP),
-        "tariffs_b64":  _read(TARIFFS_FP),
-        "state_b64":    _read(STATE_FP),
-    }
 
 # --- DB (PostgreSQL) optional layer ---
 try:
@@ -1901,6 +1887,23 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+
+# временно - эндпойнт для резервного скачивания данных
+# --- вставьте СРАЗУ ПОСЛЕ: app = FastAPI(lifespan=lifespan) ---
+@app.get("/admin/export_json")
+async def export_json():
+    def _read(fp: str):
+        try:
+            with open(fp, "rb") as f:
+                return base64.b64encode(f.read()).decode("ascii")
+        except Exception:
+            return None
+
+    return {
+        "readings_b64": _read(READINGS_FP),
+        "tariffs_b64":  _read(TARIFFS_FP),
+        "state_b64":    _read(STATE_FP),
+    }
 
 @app.get("/healthz")
 async def healthz():
