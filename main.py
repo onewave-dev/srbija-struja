@@ -28,6 +28,7 @@ import uuid
 from html import escape
 import base64
 
+
 from fastapi import FastAPI, Request, Response
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError
@@ -1903,10 +1904,16 @@ if USE_DB:
     _ensure_kvstore()
     _migrate_local_to_db_once()
 
-@app.get("/healthz")
-@app.head("/healthz")
+# GET остаётся как был
+@app.get("/healthz", include_in_schema=False)
 async def healthz():
     return {"ok": True}
+
+# ДОБАВЬ отдельный HEAD-обработчик
+@app.head("/healthz", include_in_schema=False)
+async def healthz_head():
+    # для HEAD тело не нужно — просто 200
+    return Response(status_code=200)
 
 
 @app.post("/webhook")
