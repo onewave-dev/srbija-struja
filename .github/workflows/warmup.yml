@@ -2,7 +2,9 @@ name: Warm up Render (GET via Actions)
 
 on:
   schedule:
-    - cron: "*/10 * * * *"   # каждые 10 минут
+    # GitHub Actions крутит CRON по UTC.
+    # Сдвинем на 3-й минуте, потом каждые 10, чтобы реже совпадать с UptimeRobot.
+    - cron: "3/10 * * * *"
   workflow_dispatch:
 
 jobs:
@@ -12,12 +14,15 @@ jobs:
       - name: GET /healthz (robust warmup)
         run: |
           set -e
-          URL="https://my-learning-repository.onrender.com/healthz"
+          URL="https://srbija-struja.onrender.com/healthz?src=gha"
           echo "GET -> $URL"
-          # Пояснения:
-          # -sS               : тихий режим, но ошибки показываем
-          # -4                : форсируем IPv4 (иногда сетка GHA мудрит с IPv6)
-          # --fail            : падать на 4xx/5xx
-          # --connect-timeout : таймаут только на TCP-коннект
-          # --max-time        : общий таймаут на попытку
-          # --retry
+          curl -v -sS -4 \
+               -H "User-Agent: GHA-Warmup" \
+               --fail \
+               --connect-timeout 10 \
+               --max-time 60 \
+               --retry 6 \
+               --retry-delay 10 \
+               --retry-all-errors \
+               "$URL" >/dev/null
+          echo "OK: GET 200 /healthz"
