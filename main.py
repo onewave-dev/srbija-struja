@@ -27,6 +27,7 @@ from decimal import Decimal
 import uuid
 from html import escape
 import base64
+import httpx
 
 
 from fastapi import FastAPI, Request, Response
@@ -65,6 +66,8 @@ def _is_valid_db_url(s: str) -> bool:
 DB_URL = os.environ.get("DATABASE_URL", "").strip()
 USE_DB = _is_valid_db_url(DB_URL)
 
+SB_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SB_KEY = os.environ.get("SUPABASE_SERVICE_ROLE", "")
 
 def _ensure_kvstore():
     """Создать таблицу kvstore, если DATABASE_URL задан."""
@@ -93,6 +96,14 @@ if USE_DB:
 BASE_PATH = os.environ.get("DATA_DIR", "./data")
 os.makedirs(BASE_PATH, exist_ok=True)
 
+def _sb_headers():
+    if not SB_KEY:
+        return {}
+    return {
+        "apikey": SB_KEY,
+        "Authorization": f"Bearer {SB_KEY}",
+    }
+
 READINGS_FP = os.path.join(BASE_PATH, "readings.json")
 TARIFFS_FP = os.path.join(BASE_PATH, "tariffs.json")
 STATE_FP = os.path.join(BASE_PATH, "state.json")
@@ -108,15 +119,30 @@ def _key_from_fp(fp: str) -> str:
     base = os.path.basename(fp)
     return base[:-5] if base.endswith(".json") else base
 
-
 def load_json(fp_or_key: str) -> dict:
+    key = _key_from_fp(fp_or_key)
+    # 1) Пытаемся через Supabase REST
+    if SB_URL and SB_KEY:
+        try:
+            url = f"{SB_URL}/rest/v1/kvstore"
+            params = {"select": "v", "k": f"eq.{key}"}
+            r = httpx.get(url, params=params, headers=_sb_headers(), timeout=10.0)
+            r.raise_for_status()
+            rows = r.json()
+            if rows:
+                return rows[0].get("v", {}) or {}
+        except Exception:
+            pass  # откат ниже
+
+    # 2) Старый путь через Postgres (если включён)
     if USE_DB:
-        key = _key_from_fp(fp_or_key)
         with psycopg.connect(DB_URL, row_factory=dict_row) as conn:
             with conn.cursor() as cur:
                 cur.execute("select v from kvstore where k = %s", (key,))
                 row = cur.fetchone()
                 return row["v"] if row else {}
+
+    # 3) Файлы (fallback)
     try:
         with open(fp_or_key, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -125,8 +151,30 @@ def load_json(fp_or_key: str) -> dict:
 
 
 def save_json(fp_or_key: str, data: dict) -> None:
+    key = _key_from_fp(fp_or_key)
+
+    # 1) Supabase REST: UPSERT по pk=k
+    if SB_URL and SB_KEY:
+        try:
+            url = f"{SB_URL}/rest/v1/kvstore"
+            r = httpx.post(
+                url,
+                params={"on_conflict": "k"},
+                headers={
+                    **_sb_headers(),
+                    "Content-Type": "application/json",
+                    "Prefer": "resolution=merge-duplicates,return=representation",
+                },
+                json=[{"k": key, "v": data}],
+                timeout=10.0,
+            )
+            r.raise_for_status()
+            return
+        except Exception:
+            pass  # откат ниже
+
+    # 2) Старый путь через Postgres (если включён)
     if USE_DB:
-        key = _key_from_fp(fp_or_key)
         payload = json.dumps(data, ensure_ascii=False)
         with psycopg.connect(DB_URL) as conn:
             with conn.cursor() as cur:
@@ -137,6 +185,8 @@ def save_json(fp_or_key: str, data: dict) -> None:
                 )
             conn.commit()
         return
+
+    # 3) Файлы (fallback)
     tmp = fp_or_key + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
