@@ -1,17 +1,23 @@
-name: Warm up Render free instance
+name: Warm up Render (GET via Actions)
 
 on:
   schedule:
-    # Запускаем каждые 12 минут, чтобы Render-инстанс не засыпал
-    - cron: "*/12 * * * *"
-  workflow_dispatch: # возможность запустить вручную из Actions-вкладки
+    - cron: "*/10 * * * *"   # каждые 10 минут
+  workflow_dispatch:
 
 jobs:
-  ping:
+  warmup:
     runs-on: ubuntu-latest
     steps:
-      - name: HEAD ping /healthz endpoint
+      - name: GET /healthz (robust warmup)
         run: |
-          echo "Pinging (HEAD) Render service..."
-          curl -I --fail --retry 3 --retry-delay 5 --max-time 15 \
-            https://my-learning-repository.onrender.com/healthz
+          set -e
+          URL="https://my-learning-repository.onrender.com/healthz"
+          echo "GET -> $URL"
+          # Пояснения:
+          # -sS               : тихий режим, но ошибки показываем
+          # -4                : форсируем IPv4 (иногда сетка GHA мудрит с IPv6)
+          # --fail            : падать на 4xx/5xx
+          # --connect-timeout : таймаут только на TCP-коннект
+          # --max-time        : общий таймаут на попытку
+          # --retry
