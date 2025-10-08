@@ -4,4 +4,5 @@ __pycache__/
 .DS_Store
 data/*.json
 diff.patch
+data_back_ups/
 

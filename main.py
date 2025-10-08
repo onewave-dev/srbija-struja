@@ -1887,23 +1887,21 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-
-# временно - эндпойнт для резервного скачивания данных
-# --- вставьте СРАЗУ ПОСЛЕ: app = FastAPI(lifespan=lifespan) ---
-@app.get("/admin/export_json")
-async def export_json():
-    def _read(fp: str):
+#migration to supabase
+def _migrate_local_to_db_once():
+    if not USE_DB or os.environ.get("MIGRATE_FROM_DISK", "").lower() not in {"1","true","yes"}:
+        return
+    for fp in (READINGS_FP, TARIFFS_FP, STATE_FP):
         try:
-            with open(fp, "rb") as f:
-                return base64.b64encode(f.read()).decode("ascii")
+            with open(fp, "r", encoding="utf-8") as f:
+                data = json.load(f)
         except Exception:
-            return None
+            data = {}
+        save_json(fp, data)  # upsert в kvstore (ключ = имя файла без .json)
 
-    return {
-        "readings_b64": _read(READINGS_FP),
-        "tariffs_b64":  _read(TARIFFS_FP),
-        "state_b64":    _read(STATE_FP),
-    }
+if USE_DB:
+    _ensure_kvstore()
+    _migrate_local_to_db_once()
 
 @app.get("/healthz")
 async def healthz():
