@@ -1904,6 +1904,7 @@ if USE_DB:
     _migrate_local_to_db_once()
 
 @app.get("/healthz")
+@app.head("/healthz")
 async def healthz():
     return {"ok": True}
 

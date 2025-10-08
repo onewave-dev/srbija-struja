@@ -1,0 +1,17 @@
+name: Warm up Render free instance
+
+on:
+  schedule:
+    # Запускаем каждые 12 минут, чтобы Render-инстанс не засыпал
+    - cron: "*/12 * * * *"
+  workflow_dispatch: # возможность запустить вручную из Actions-вкладки
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: HEAD ping /healthz endpoint
+        run: |
+          echo "Pinging (HEAD) Render service..."
+          curl -I --fail --retry 3 --retry-delay 5 --max-time 15 \
+            https://my-learning-repository.onrender.com/healthz
