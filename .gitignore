@@ -1,8 +1,57 @@
 __pycache__/
-.venv/
 *.pyc
 .DS_Store
 data/*.json
 diff.patch
 data_back_ups/
+admin/
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+*.egg
+*.log
+
+# === Virtual environment ===
+.venv/
+env/
+venv/
+ENV/
+pip-wheel-metadata/
+
+# === Local configuration & secrets ===
+.env
+.env.*
+*.env
+secrets.json
+config.json
+supabase_keys.json
+
+# === OS / IDE files ===
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# === Build & packaging ===
+build/
+dist/
+*.spec
+
+# === Data files (if ты сохраняешь кэш/локальные JSON) ===
+data/
+tmp/
+cache/
+__data__/
+*.sqlite3
+*.db
+
+# =
+
 
