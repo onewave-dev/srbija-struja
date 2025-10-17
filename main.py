@@ -1969,13 +1969,15 @@ async def lifespan(_: FastAPI):
         await ptb_app.start()
         watchdog_task = asyncio.create_task(_webhook_watchdog_loop(ptb_app.bot, 900))
         try:
-            await _ensure_webhook_current()   # проверяем и чиним вебхук на старте
-            yield
+            await _ensure_webhook_current()   # проверяем/чиним вебхук на старте
+            yield                              # тут работает FastAPI
         finally:
+            # аккуратно гасим фоновые задачи
             watchdog_task.cancel()
             with suppress(asyncio.CancelledError):
                 await watchdog_task
-        await ptb_app.stop()
+            # и только затем останавливаем PTB
+            await ptb_app.stop()
 
 
 app = FastAPI(lifespan=lifespan)
