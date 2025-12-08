@@ -27,7 +27,6 @@ from decimal import Decimal
 import uuid
 from html import escape
 import base64
-import httpx
 
 
 from fastapi import FastAPI, Request, Response
@@ -43,66 +42,9 @@ from telegram.ext import (
     filters,
 )
 
-
-
-# --- DB (PostgreSQL) optional layer ---
-try:
-    import psycopg
-    from psycopg.rows import dict_row
-    from psycopg import sql
-except Exception:
-    psycopg = None
-    dict_row = None
-    sql = None
-
-def _is_valid_db_url(s: str) -> bool:
-    if not s:
-        return False
-    s2 = s.strip().lower()
-    if s2 in {"none", "null", "false", "0", "off"}:
-        return False
-    return s2.startswith(("postgres://", "postgresql://"))
-
-DB_URL = os.environ.get("DATABASE_URL", "").strip()
-USE_DB = _is_valid_db_url(DB_URL)
-
-SB_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
-SB_KEY = os.environ.get("SUPABASE_SERVICE_ROLE", "")
-
-def _ensure_kvstore():
-    """Создать таблицу kvstore, если DATABASE_URL задан."""
-    if not USE_DB:
-        return
-    if psycopg is None:
-        raise RuntimeError("psycopg не установлен, а DATABASE_URL задан")
-    with psycopg.connect(DB_URL) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                create table if not exists kvstore (
-                    k text primary key,
-                    v jsonb not null,
-                    updated_at timestamptz not null default now()
-                );
-                """
-            )
-        conn.commit()
-
-
-if USE_DB:
-    _ensure_kvstore()
-
 # === 0) ХРАНИЛИЩЕ (локальная папка fallback) ===
 BASE_PATH = os.environ.get("DATA_DIR", "./data")
 os.makedirs(BASE_PATH, exist_ok=True)
-
-def _sb_headers():
-    if not SB_KEY:
-        return {}
-    return {
-        "apikey": SB_KEY,
-        "Authorization": f"Bearer {SB_KEY}",
-    }
 
 READINGS_FP = os.path.join(BASE_PATH, "readings.json")
 TARIFFS_FP = os.path.join(BASE_PATH, "tariffs.json")
@@ -115,82 +57,32 @@ for fp in (READINGS_FP, TARIFFS_FP, STATE_FP):
 
 
 # === 1) JSON утилиты (БД или файлы) ===
-def _key_from_fp(fp: str) -> str:
-    base = os.path.basename(fp)
-    return base[:-5] if base.endswith(".json") else base
 
-def load_json(fp_or_key: str) -> dict:
-    key = _key_from_fp(fp_or_key)
-    # 1) Пытаемся через Supabase REST
-    if SB_URL and SB_KEY:
-        try:
-            url = f"{SB_URL}/rest/v1/kvstore"
-            params = {"select": "v", "k": f"eq.{key}"}
-            r = httpx.get(url, params=params, headers=_sb_headers(), timeout=10.0)
-            r.raise_for_status()
-            rows = r.json()
-            if rows:
-                return rows[0].get("v", {}) or {}
-        except Exception:
-            pass  # откат ниже
-
-    # 2) Старый путь через Postgres (если включён)
-    if USE_DB:
-        with psycopg.connect(DB_URL, row_factory=dict_row) as conn:
-            with conn.cursor() as cur:
-                cur.execute("select v from kvstore where k = %s", (key,))
-                row = cur.fetchone()
-                return row["v"] if row else {}
-
-    # 3) Файлы (fallback)
+def load_json(fp: str) -> dict:
+    """
+    Простая загрузка JSON из локального файла.
+    Никаких Supabase/БД, никаких миграций.
+    """
     try:
-        with open(fp_or_key, "r", encoding="utf-8") as f:
+        with open(fp, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
+    except FileNotFoundError:
+        # файла нет — считаем, что данных пока нет
+        return {}
+    except json.JSONDecodeError:
+        # файл есть, но повреждён — логируем и возвращаем пустой dict
+        logging.exception("Не удалось разобрать JSON из файла %s", fp)
         return {}
 
-
-def save_json(fp_or_key: str, data: dict) -> None:
-    key = _key_from_fp(fp_or_key)
-
-    # 1) Supabase REST: UPSERT по pk=k
-    if SB_URL and SB_KEY:
-        try:
-            url = f"{SB_URL}/rest/v1/kvstore"
-            r = httpx.post(
-                url,
-                params={"on_conflict": "k"},
-                headers={
-                    **_sb_headers(),
-                    "Content-Type": "application/json",
-                    "Prefer": "resolution=merge-duplicates,return=representation",
-                },
-                json=[{"k": key, "v": data}],
-                timeout=10.0,
-            )
-            r.raise_for_status()
-            return
-        except Exception:
-            pass  # откат ниже
-
-    # 2) Старый путь через Postgres (если включён)
-    if USE_DB:
-        payload = json.dumps(data, ensure_ascii=False)
-        with psycopg.connect(DB_URL) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "insert into kvstore(k, v) values (%s, %s::jsonb) "
-                    "on conflict (k) do update set v = excluded.v, updated_at = now()",
-                    (key, payload),
-                )
-            conn.commit()
-        return
-
-    # 3) Файлы (fallback)
-    tmp = fp_or_key + ".tmp"
+def save_json(fp: str, data: dict) -> None:
+    """
+    Сохраняем данные только в локальный файл.
+    Запись атомарная: сначала во временный, затем заменяем основной.
+    """
+    tmp = fp + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
-    os.replace(tmp, fp_or_key)
+    os.replace(tmp, fp)
 
 
 def json_default(o):
@@ -201,58 +93,6 @@ def json_default(o):
     if isinstance(o, uuid.UUID):
         return str(o)
     return str(o)
-
-
-# === 1.1) Сиды ===
-DEFAULT_TARIFFS = {
-    "currency": "RSD",
-    "green_day": 9.1092,
-    "green_night": 2.2773,
-    "blue_day": 13.6638,
-    "blue_night": 3.4160,
-    "effective_from": "1900-01",
-}
-
-DEFAULT_JUNE_2025 = {
-    "2025-06": {
-        "1": {"day": 31960, "night": 11822},
-        "2": {"day": 4718, "night": 2323},
-    }
-}
-
-
-def seed_default_tariffs():
-    data = load_json(TARIFFS_FP)
-    versions = data.get("versions", [])
-    if not versions:
-        data["versions"] = [{
-            "id": 1,
-            "created_at": datetime.now().isoformat(timespec="seconds"),
-            "by": 0,
-            "currency": DEFAULT_TARIFFS["currency"],
-            "green_day": float(DEFAULT_TARIFFS["green_day"]),
-            "green_night": float(DEFAULT_TARIFFS["green_night"]),
-            "blue_day": float(DEFAULT_TARIFFS["blue_day"]),
-            "blue_night": float(DEFAULT_TARIFFS["blue_night"]),
-            "effective_from": DEFAULT_TARIFFS["effective_from"],
-            "note": "Seed: initial tariffs from Table 3",
-        }]
-        save_json(TARIFFS_FP, data)
-
-
-def seed_default_june_readings():
-    data = load_json(READINGS_FP)
-    ym = "2025-06"
-    if ym not in data:
-        data[ym] = {}
-    for floor, vals in DEFAULT_JUNE_2025[ym].items():
-        if floor not in data[ym]:
-            data[ym][floor] = {"day": int(vals["day"]), "night": int(vals["night"])}
-    save_json(READINGS_FP, data)
-
-
-seed_default_tariffs()
-seed_default_june_readings()
 
 
 # === 1.2) STATE helpers (сохранённые отчёты) ===
@@ -747,10 +587,10 @@ def get_main_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("↩️ Откат последних показаний", callback_data="undo_last")],
         [InlineKeyboardButton("📈 Статистика", callback_data="stats_menu")],
     ]
-    # Админ-кнопка теперь просто показывает инфо о файловом хранилище
+    # Админ-кнопка
     if is_admin:
         keyboard.append(
-            [InlineKeyboardButton("адм: Хранилище", callback_data="admin_show_tables")]
+            [InlineKeyboardButton("адм: Просмотр таблиц", callback_data="admin_show_tables")]
         )
     return InlineKeyboardMarkup(keyboard)
 
@@ -981,7 +821,7 @@ async def card_submission_call(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 # --- Админ: информация о хранилище ---
-async def admin_db_start(update, context):
+async def admin_db_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     uid = update.effective_user.id
@@ -994,46 +834,52 @@ async def admin_db_start(update, context):
         )
         return
 
-    # Новое поведение: просто показываем информацию о файловом хранилище
-    msg_lines = [
-        "ℹ️ Сейчас бот работает *только* с локальными файлами на сервере.",
+    # Обновляем текущее сообщение – краткая информация + главное меню
+    info_lines = [
+        "ℹ️ Бот работает *только* с локальными файлами данных.",
         "",
         f"📁 Каталог данных: `{BASE_PATH}`",
         "",
-        "Используемые файлы:",
-        f"• `readings.json`  — показания счётчиков",
-        f"• `tariffs.json`   — версии тарифов",
-        f"• `state.json`     — сохранённые отчёты и служебное состояние",
+        "Сейчас выведу содержимое трёх файлов:",
+        "• `readings.json`  — показания счётчиков",
+        "• `tariffs.json`   — версии тарифов",
+        "• `state.json`     — сохранённые отчёты и состояние",
         "",
-        "Подключение к PostgreSQL и Supabase отключено и больше не используется.",
+        "Если файлы большие, они будут показаны в нескольких сообщениях.",
     ]
-    text = "\n".join(msg_lines)
-
     await q.edit_message_text(
-        text,
+        "\n".join(info_lines),
         reply_markup=main_menu_markup_for(update),
         parse_mode="Markdown",
         disable_web_page_preview=True,
     )
 
+    chat_id = update.effective_chat.id
 
-async def admin_db_show_table(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
+    # Вспомогательная функция: вывести один JSON-файл частями
+    async def send_json_file(title: str, fp: str):
+        data = load_json(fp)
+        # заголовок + pretty-printed JSON
+        header = f"📄 {title} (`{os.path.basename(fp)}`)\n\n"
+        raw_json = json.dumps(data, ensure_ascii=False, indent=2)
+        text_block = header + raw_json
 
-    uid = update.effective_user.id
-    if not is_admin_id(uid):
-        await q.edit_message_text(
-            "🚫 Доступ запрещён.",
-            reply_markup=main_menu_markup_for(update),
-        )
-        return
+        # экранируем под HTML и режем на части, чтобы не упереться в лимит 4096
+        pre_content = escape(text_block)
+        for part in send_long_text(None, pre_content):
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"<pre>{part}</pre>",
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
 
-    await q.edit_message_text(
-        "Режим просмотра таблиц БД отключён.\n"
-        "Бот теперь использует только локальные JSON-файлы на сервере.",
-        reply_markup=main_menu_markup_for(update),
-    )
+    # Показываем три файла по очереди
+    await send_json_file("Показания счётчиков", READINGS_FP)
+    await send_json_file("Тарифы", TARIFFS_FP)
+    await send_json_file("Состояние / отчёты", STATE_FP)
+
+
 
 
 # === Ввод показаний и прочие сценарии ===
@@ -1722,7 +1568,6 @@ def build_ptb_app() -> Application:
 
     # Админ-кнопки (вне ConversationHandler'ов)
     app.add_handler(CallbackQueryHandler(admin_db_start, pattern=r"^admin_show_tables$"))
-    app.add_handler(CallbackQueryHandler(admin_db_show_table, pattern=r"^dbtbl_[A-Za-z0-9_]+$"))
     app.add_handler(CallbackQueryHandler(card_submission_show, pattern=r"^card_submission$"))
     app.add_handler(CallbackQueryHandler(card_submission_call, pattern=r"^call_eds$"))
 
@@ -1923,23 +1768,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-#migration to supabase
-def _migrate_local_to_db_once():
-    if not USE_DB or os.environ.get("MIGRATE_FROM_DISK", "").lower() not in {"1","true","yes"}:
-        return
-    for fp in (READINGS_FP, TARIFFS_FP, STATE_FP):
-        try:
-            with open(fp, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception:
-            data = {}
-        save_json(fp, data)  # upsert в kvstore (ключ = имя файла без .json)
-
-if USE_DB:
-    _ensure_kvstore()
-    _migrate_local_to_db_once()
-
-# GET остаётся как был
+# GET 
 @app.get("/healthz", include_in_schema=False)
 async def healthz():
     return {"ok": True}
@@ -1963,27 +1792,6 @@ async def telegram_webhook(request: Request):
     update = Update.de_json(await request.json(), ptb_app.bot)
     await ptb_app.process_update(update)
     return Response(status_code=HTTPStatus.OK)
-
-
-@app.get("/db_ping")
-async def db_ping():
-    if not USE_DB:
-        return {"ok": False, "reason": "DATABASE_URL not set or invalid"}
-    try:
-        with psycopg.connect(DB_URL, row_factory=dict_row) as conn:
-            with conn.cursor() as cur:
-                # Берём IPv4/порт и версию, с понятными алиасами
-                cur.execute("select inet_server_addr() as addr, inet_server_port() as port, version() as ver")
-                row = cur.fetchone()
-                return {
-                    "ok": True,
-                    "server_addr": row["addr"],
-                    "server_port": row["port"],
-                    "version": row["ver"],
-                }
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
 
 
 def _desired_webhook_url() -> Optional[str]:
