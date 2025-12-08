@@ -747,8 +747,11 @@ def get_main_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("↩️ Откат последних показаний", callback_data="undo_last")],
         [InlineKeyboardButton("📈 Статистика", callback_data="stats_menu")],
     ]
-    if (USE_DB or (SB_URL and SB_KEY)) and is_admin:
-        keyboard.append([InlineKeyboardButton("адм: Просмотр таблиц", callback_data="admin_show_tables")])
+    # Админ-кнопка теперь просто показывает инфо о файловом хранилище
+    if is_admin:
+        keyboard.append(
+            [InlineKeyboardButton("адм: Хранилище", callback_data="admin_show_tables")]
+        )
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -977,7 +980,7 @@ async def card_submission_call(update: Update, context: ContextTypes.DEFAULT_TYP
             )
 
 
-# --- Админ: Просмотр БД ---
+# --- Админ: информация о хранилище ---
 async def admin_db_start(update, context):
     q = update.callback_query
     await q.answer()
@@ -985,115 +988,53 @@ async def admin_db_start(update, context):
 
     # доступ только админу
     if not is_admin_id(uid):
-        await q.edit_message_text("🚫 Доступ запрещён.", reply_markup=main_menu_markup_for(update))
+        await q.edit_message_text(
+            "🚫 Доступ запрещён.",
+            reply_markup=main_menu_markup_for(update),
+        )
         return
 
-    # Режим 1: прямое подключение к Postgres (как было)
-    if USE_DB:
-        try:
-            with psycopg.connect(DB_URL, row_factory=dict_row) as conn:
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        select table_name
-                        from information_schema.tables
-                        where table_schema='public'
-                        order by 1
-                    """)
-                    names = [r["table_name"] for r in cur.fetchall()]
-        except Exception as e:
-            await q.edit_message_text(
-                f"❌ Ошибка подключения к БД: {e}",
-                reply_markup=main_menu_markup_for(update),
-            )
-            return
+    # Новое поведение: просто показываем информацию о файловом хранилище
+    msg_lines = [
+        "ℹ️ Сейчас бот работает *только* с локальными файлами на сервере.",
+        "",
+        f"📁 Каталог данных: `{BASE_PATH}`",
+        "",
+        "Используемые файлы:",
+        f"• `readings.json`  — показания счётчиков",
+        f"• `tariffs.json`   — версии тарифов",
+        f"• `state.json`     — сохранённые отчёты и служебное состояние",
+        "",
+        "Подключение к PostgreSQL и Supabase отключено и больше не используется.",
+    ]
+    text = "\n".join(msg_lines)
 
-        if not names:
-            await q.edit_message_text("📭 В схеме public нет таблиц.",
-                                      reply_markup=main_menu_markup_for(update))
-            return
-
-        rows, row = [], []
-        for name in names:
-            row.append(InlineKeyboardButton(name, callback_data=f"dbtbl_{name}"))
-            if len(row) == 2:
-                rows.append(row); row = []
-        if row:
-            rows.append(row)
-        rows.append([InlineKeyboardButton("↩️ В меню", callback_data="back_menu")])
-        await q.edit_message_text("адм: Выбери таблицу:", reply_markup=InlineKeyboardMarkup(rows))
-        return
-
-    # Режим 2: Supabase REST — показываем содержимое kvstore (первые 50 строк)
-    if SB_URL and SB_KEY:
-        try:
-            url = f"{SB_URL}/rest/v1/kvstore"
-            params = {"select": "k,v", "limit": "50"}
-            r = httpx.get(url, params=params, headers=_sb_headers(), timeout=10.0)
-            r.raise_for_status()
-            rows = r.json()
-        except Exception as e:
-            await q.edit_message_text(
-                f"❌ Ошибка Supabase REST: {e}",
-                reply_markup=main_menu_markup_for(update),
-            )
-            return
-
-        if not rows:
-            await q.edit_message_text("📄 kvstore: пусто.",
-                                      reply_markup=main_menu_markup_for(update))
-            return
-
-        head = f"адм: kvstore (первые {len(rows)})\n"
-        body = "\n".join(json.dumps(r, ensure_ascii=False, default=json_default) for r in rows)
-        await q.edit_message_text(head + body,
-                                  reply_markup=main_menu_markup_for(update),
-                                  disable_web_page_preview=True)
-        return
-
-    # Если ни DB, ни REST не настроены
     await q.edit_message_text(
-        "⚠️ Нет ни DATABASE_URL, ни SUPABASE_URL/SUPABASE_SERVICE_ROLE.",
+        text,
         reply_markup=main_menu_markup_for(update),
+        parse_mode="Markdown",
+        disable_web_page_preview=True,
     )
 
 
 async def admin_db_show_table(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
+
     uid = update.effective_user.id
-    if not (USE_DB and is_admin_id(uid)):
-        await q.edit_message_text("🚫 Доступ запрещён.", reply_markup=main_menu_markup_for(update))
+    if not is_admin_id(uid):
+        await q.edit_message_text(
+            "🚫 Доступ запрещён.",
+            reply_markup=main_menu_markup_for(update),
+        )
         return
-    if not q.data.startswith("dbtbl_"):
-        await q.edit_message_text("Некорректный выбор.", reply_markup=main_menu_markup_for(update))
-        return
-    tbl = q.data.replace("dbtbl_", "")
-    try:
-        with psycopg.connect(DB_URL, row_factory=dict_row) as conn:
-            with conn.cursor() as cur:
-                query = sql.SQL("select * from {} limit 50").format(sql.Identifier(tbl))
-                cur.execute(query)
-                rows = cur.fetchall()
-    except Exception as e:
-        await q.edit_message_text(f"❌ Ошибка запроса: {e}",
-                                  reply_markup=main_menu_markup_for(update))
-        return
-    if not rows:
-        await q.edit_message_text(f"📄 {tbl}: пусто.", reply_markup=main_menu_markup_for(update))
-        return
-    head = f"адм: первые {len(rows)} строк из {tbl}\n"
-    lines = [json.dumps(r, ensure_ascii=False, default=json_default) for r in rows]
-    text = head + "\n".join(lines)
-    parts = send_long_text(q.edit_message_text, text)
-    if parts:
-        await q.edit_message_text(parts[0], disable_web_page_preview=True)
-        for p in parts[1:]:
-            await q.message.reply_text(p, disable_web_page_preview=True)
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⬅️ Таблицы", callback_data="admin_show_tables")],
-        [InlineKeyboardButton("↩️ В меню", callback_data="back_menu")]
-    ])
-    await q.message.reply_text("Готово.", reply_markup=kb)
+
+    await q.edit_message_text(
+        "Режим просмотра таблиц БД отключён.\n"
+        "Бот теперь использует только локальные JSON-файлы на сервере.",
+        reply_markup=main_menu_markup_for(update),
+    )
+
 
 # === Ввод показаний и прочие сценарии ===
 async def choose_floor(update: Update, context: ContextTypes.DEFAULT_TYPE):
